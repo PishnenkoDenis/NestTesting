@@ -1,82 +1,127 @@
-import { HttpException, HttpStatus, Inject, Injectable } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import { DB_CONNECTION } from 'src/constants';
-import { CreateRentalDto } from './dto/CreateRentalDto';
+import { MS_AT_DAYS } from 'src/constants/global';
+import { RatesService } from 'src/rates/rates.service';
 
 @Injectable()
 export class RentalService {
-  constructor(@Inject(DB_CONNECTION) private dbConnection: any) {}
+  constructor(
+    @Inject(DB_CONNECTION) private dbConnection: any,
+    private ratesService: RatesService,
+  ) {}
 
-  async checkAvailableCar(id: number): Promise<boolean> {
+  async checkAvailableCar({
+    id,
+    startDate,
+    endDate,
+  }: {
+    id: number;
+    startDate: Date;
+    endDate: Date;
+  }): Promise<boolean> {
     const car = await this.dbConnection.query(
-      `SELECT * FROM booking WHERE car_id = ${id}`,
+      `SELECT rental_end
+       FROM booking
+       WHERE car_id = $1
+        AND (
+          $2 BETWEEN rental_start - interval '3 day' AND rental_end + interval '3 day'
+          OR $3 BETWEEN rental_start - interval '3 day' AND rental_end + interval '3 day'
+          )`,
+      [id, startDate, endDate],
     );
-    return !car && true;
+
+    return !car.rows?.length;
   }
 
-  async createRent(dto: CreateRentalDto) {
-    // const car = await this.dbConnection.query(
-    //   `SELECT * FROM booking WHERE car_id = ${dto.car_id}`,
-    // );
+  async createRental({
+    userId,
+    carId,
+    rentalStart,
+    rentalEnd,
+  }: {
+    userId: number;
+    carId: number;
+    rentalStart: Date;
+    rentalEnd: Date;
+  }) {
+    const startIsNotWeekend = this.checkWeekdays(rentalStart);
+    const endIsNotWeekend = this.checkWeekdays(rentalEnd);
 
-    this.checkRequest(dto.rental_start, dto.rental_end);
-    return true;
-  }
-
-  checkRentalDate(periodEnd: string, customerDate: string) {
-    const start = new Date(customerDate).getDate();
-    const end = new Date(periodEnd).getDate();
-
-    return start - end > 3;
-  }
-
-  checkWeekdays(dateStr: string) {
-    const day = new Date(dateStr).getDay();
-
-    if (day === 0 || day === 6) return false;
-    else return true;
-  }
-
-  checkPeriod(start: string, end: string) {
-    const dateStart = new Date(start).getDate();
-    const dateEnd = new Date(end).getDate();
-
-    const monthStart = new Date(start).getMonth();
-    const monthEnd = new Date(end).getMonth();
-
-    if (monthStart === monthEnd) return dateEnd - dateStart <= 30;
-    else {
-      const yearStart = new Date(start).getFullYear();
-      const daysAmount = new Date(yearStart, monthStart + 1, 0).getDate();
-      return daysAmount - dateStart + dateEnd <= 30;
+    if (!startIsNotWeekend || !endIsNotWeekend) {
+      throw new BadRequestException('Rental is possible only on weekdays');
     }
+
+    const isAvailable = await this.checkAvailableCar({
+      id: carId,
+      startDate: rentalStart,
+      endDate: rentalEnd,
+    });
+
+    if (!isAvailable) {
+      throw new BadRequestException('Car is not available');
+    }
+
+    const price = await this.calculateRental(rentalStart, rentalEnd);
+
+    await this.dbConnection.query(
+      `INSERT INTO booking (user_id, car_id, rental_start, rental_end, price) VALUES($1, $2, $3, $4, $5)`,
+      [userId, carId, rentalStart, rentalEnd, price],
+    );
   }
 
-  checkRequest(startDate: string, endDate: string) {
-    // const rentalDate = this.checkRentalDate(periodEnd, startDate);
+  async calculateRental(start: Date, end: Date) {
+    const discounts = await this.ratesService.getRates();
 
-    // if (!rentalDate) {
-    //   throw new HttpException(
-    //     'Less than three days have passed since the last day of the rental',
-    //     HttpStatus.FORBIDDEN,
-    //   );
-    // }
+    const days = this.getPeriod(start, end);
+    let sum = 0;
 
-    const checkedDate = this.checkWeekdays(startDate);
-
-    if (!checkedDate) {
-      throw new HttpException(
-        'Rental is possible only on weekdays',
-        HttpStatus.FORBIDDEN,
+    for (let dayNumber = 1; dayNumber <= days; dayNumber += 1) {
+      const discount = discounts.find(
+        (item) => item.startDate <= dayNumber && dayNumber <= item.endDate,
       );
+
+      if (discount) {
+        const percent = discount?.percent || 0;
+        const percentPrice = (discount.price * percent) / 100;
+        const resultPrice = discount.price - percentPrice;
+        sum = sum + resultPrice;
+      } else {
+        sum += 1000;
+      }
     }
 
-    const receivedPeriod = this.checkPeriod(startDate, endDate);
+    return sum;
+  }
 
-    if (!receivedPeriod) {
-      throw new HttpException(
-        'Rental period can not be longer than 30 days',
-        HttpStatus.FORBIDDEN,
-      );
-    }
+  checkWeekdays(date: Date) {
+    const day = date.getDay();
+
+    return day !== 0 && day !== 6;
+  }
+
+  getPeriod(start: Date, end: Date) {
+    const differentMS = end.valueOf() - start.valueOf();
+    const differntDays = Math.ceil(
+      parseFloat((differentMS / MS_AT_DAYS).toFixed(3)),
+    );
+    console.log(differntDays);
+
+    return differntDays;
+  }
+
+  async createReport(carId: number) {
+    // TODO Should be created
+    const reportRecord = await this.dbConnection.query(
+      `SELECT 
+        id,
+        0 AS percent,
+        '2022' AS "year",
+        '12' AS "month"
+       FROM booking
+       WHERE car_id = $1`,
+      [carId],
+    );
+
+    return reportRecord.rows;
   }
 }
