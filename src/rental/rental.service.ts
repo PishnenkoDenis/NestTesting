@@ -1,13 +1,21 @@
-import { BadRequestException, Inject, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  forwardRef,
+  Inject,
+  Injectable,
+} from '@nestjs/common';
 import { DB_CONNECTION } from 'src/constants';
 import { MS_AT_DAYS } from 'src/constants/global';
 import { RatesService } from 'src/rates/rates.service';
+import { ReportService } from 'src/report/report.service';
 
 @Injectable()
 export class RentalService {
   constructor(
     @Inject(DB_CONNECTION) private dbConnection: any,
     private ratesService: RatesService,
+    @Inject(forwardRef(() => ReportService))
+    private reportService: ReportService,
   ) {}
 
   async checkAvailableCar({
@@ -104,24 +112,20 @@ export class RentalService {
     const differntDays = Math.ceil(
       parseFloat((differentMS / MS_AT_DAYS).toFixed(3)),
     );
-    console.log(differntDays);
 
     return differntDays;
   }
 
-  async createReport(carId: number) {
-    // TODO Should be created
-    const reportRecord = await this.dbConnection.query(
-      `SELECT 
-        id,
-        0 AS percent,
-        '2022' AS "year",
-        '12' AS "month"
-       FROM booking
-       WHERE car_id = $1`,
-      [carId],
-    );
+  async createReportForCar(carId: number) {
+    const percent = await this.reportService.getRentalPercentForCar(carId);
 
-    return reportRecord.rows;
+    return {
+      carId,
+      percent: `${percent}%`,
+    };
+  }
+
+  async createSummaryReportForCars() {
+    return await this.reportService.getRentalSummary();
   }
 }

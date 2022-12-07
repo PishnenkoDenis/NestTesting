@@ -77,13 +77,22 @@ export class RentalController {
     return { statusCode: HttpStatus.CREATED, price };
   }
 
-  @ApiOperation({ summary: 'Create report (not finished)' })
+  @ApiOperation({ summary: 'Create report for certain car' })
   @ApiResponse({ status: 200 })
   @Get('report/:carId')
   async createReport(@Param('carId', ParseIntPipe) carId: number) {
-    const report = await this.rentalService.createReport(carId);
+    const report = await this.rentalService.createReportForCar(carId);
 
-    return { statusCode: HttpStatus.CREATED, report };
+    return { statusCode: HttpStatus.OK, report };
+  }
+
+  @ApiOperation({ summary: 'Create summary report for cars' })
+  @ApiResponse({ status: 200 })
+  @Get('report')
+  async createSummaryReport() {
+    const report = await this.rentalService.createSummaryReportForCars();
+
+    return { statusCode: HttpStatus.OK, report };
   }
 
   @ApiOperation({ summary: 'Check car available' })
